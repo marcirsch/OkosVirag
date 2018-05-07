@@ -47,11 +47,13 @@ extern "C" {
 #include "gpio.h"
 #include "rcc.h"
 #include "stm32l0xx_ll_utils.h"
+
+#include "Sleep.h"
 }
 #include "RF24.h"
 
 /* USER CODE BEGIN Includes */
-#include "Sleep.h"
+
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
@@ -78,25 +80,42 @@ uint8_t addresses[][6] = { "1Node", "2Node" };
 // maximum payload is 32 bytes
 // myaddr is 4, type is 1
 // msg has 27 left
-typedef __attribute__((__packed__))struct {
+#pragma pack(1)
+typedef struct {
 	uint32_t myaddr;
 	uint8_t msgType;
 	uint32_t msg[27];
-} send_t;
+}__attribute__ ((packed)) msg_header_t;
+#pragma pack()
 
-typedef __attribute__((__packed__))struct {
+#pragma pack(1)
+typedef struct {
 	int8_t temperature;
 	int8_t humidity;
-} msg_t;
+}__attribute__ ((packed)) sensor_msg_t;
+#pragma pack()
 
-typedef __attribute__((__packed__))struct {
-	int8_t temperature;
-	int8_t humidity;
-} dl_msg_t;
+#pragma pack(1)
+typedef struct {
+	int8_t water_threshold;
+	int8_t sleep_seconds;
+} __attribute__ ((packed)) downlink_msg_t;
+#pragma pack()
 
-dl_msg_t dl_msg;
-msg_t MSGstruct;
-send_t PLstruct;
+
+#pragma pack(1)
+typedef struct {
+	int8_t water_threshold;
+	int8_t sleep_seconds;
+} __attribute__ ((packed)) configuration_t;
+#pragma pack()
+
+
+downlink_msg_t downlinkMsg;
+sensor_msg_t sensorMsg;
+msg_header_t headerMsg;
+
+configuration_t config = {10,10};
 
 /* USER CODE END 0 */
 
@@ -133,7 +152,7 @@ int main(void) {
 	/* USER CODE BEGIN 2 */
 	myAddr = LL_GetUID_Word0(); //use word0 of unique ID as addr
 
-	bool radioNumber = 0;
+
 	RF24 radio(NRF24_CE_Pin, NRF24_CS_Pin);
 
 	radio.begin();
@@ -152,16 +171,16 @@ int main(void) {
 	while (1) {
 		/* USER CODE END WHILE */
 		//Do measurements here, update sensor data
-		PLstruct.myaddr = myAddr;
-		PLstruct.msgType = MSG_TYPE_TEMP_HUM;
-		MSGstruct.temperature = 30;
-		MSGstruct.humidity = 70;
-		memcpy(PLstruct.msg, &MSGstruct, sizeof(msg_t));
+		headerMsg.myaddr = myAddr;
+		headerMsg.msgType = MSG_TYPE_TEMP_HUM;
+		sensorMsg.temperature = 30;
+		sensorMsg.humidity = 70;
+		memcpy(headerMsg.msg, &sensorMsg, sizeof(sensor_msg_t));
 
 		//send on radio
 		radio.stopListening();          // First, stop listening so we can talk.
 
-		if (!radio.write(&PLstruct, sizeof(PLstruct))) {
+		if (!radio.write(&headerMsg, sizeof(headerMsg))) {
 			//handle send fail
 		}
 
@@ -176,13 +195,15 @@ int main(void) {
 			if (radio.available()) {
 				// Fetch the payload, and see if this was the last one.
 				while (radio.available()) {
-					radio.read(&PLstruct, sizeof(send_t));
+					radio.read(&headerMsg, sizeof(msg_header_t));
 				}
 
-				if (PLstruct.myaddr
-						== myAddr&& PLstruct.msgType == MSG_TYPE_DOWNLINK) {
+				if (headerMsg.myaddr
+						== myAddr&& headerMsg.msgType == MSG_TYPE_DOWNLINK) {
 					//msg for me in downlink
-					memcpy(&dl_msg, PLstruct.msg, sizeof(dl_msg_t));
+					memcpy(&downlinkMsg, headerMsg.msg, sizeof(downlink_msg_t));
+					config.sleep_seconds = downlinkMsg.sleep_seconds;
+					config.water_threshold = downlinkMsg.water_threshold;
 
 					//handle downlink
 
@@ -197,10 +218,9 @@ int main(void) {
 		HAL_IWDG_Refresh(&hiwdg); //reload watchdog
 
 		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-		HAL_Delay(1000);
 
 		//sleep
-//		Sleep(10);
+		Sleep(config.sleep_seconds);
 
 	}
 	/* USER CODE END 3 */

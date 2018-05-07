@@ -12,6 +12,12 @@ void Sleep(int sleepSec) {
 	if (sleepSec < 0) {
 		return;
 	}
+
+	HAL_Delay(sleepSec*1000);
+	return;
+
+
+
 	/* Enable Ultra low power mode */
 	HAL_PWREx_EnableUltraLowPower();
 
