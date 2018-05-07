@@ -90,15 +90,16 @@ typedef struct {
 
 #pragma pack(1)
 typedef struct {
-	int8_t temperature;
-	int8_t humidity;
+	int16_t temperature;
+	int16_t humidity;
+	int16_t light;
 }__attribute__ ((packed)) sensor_msg_t;
 #pragma pack()
 
 #pragma pack(1)
 typedef struct {
-	int8_t water_threshold;
-	int8_t sleep_seconds;
+	int16_t water_threshold;
+	int16_t sleep_seconds;
 } __attribute__ ((packed)) downlink_msg_t;
 #pragma pack()
 
@@ -170,11 +171,15 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 	while (1) {
 		/* USER CODE END WHILE */
+
+		// TODO kiolvasott szenzoradatok
+
 		//Do measurements here, update sensor data
 		headerMsg.myaddr = myAddr;
 		headerMsg.msgType = MSG_TYPE_TEMP_HUM;
 		sensorMsg.temperature = 30;
 		sensorMsg.humidity = 70;
+		sensorMsg.light = 20;
 		memcpy(headerMsg.msg, &sensorMsg, sizeof(sensor_msg_t));
 
 		//send on radio
@@ -211,6 +216,8 @@ int main(void) {
 
 			}
 		}
+
+		// TODO beavatkozás
 
 		// Try again 1s later
 
