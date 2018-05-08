@@ -48,6 +48,9 @@ extern "C" {
 #include "rcc.h"
 #include "stm32l0xx_ll_utils.h"
 
+#include "math.h"
+#include "dht11.h"
+
 #include "Sleep.h"
 }
 #include "RF24.h"
@@ -60,6 +63,13 @@ extern "C" {
 #define MSG_TYPE_TEMP_HUM 1
 #define MSG_TYPE_DOWNLINK 0
 uint32_t myAddr;
+
+// Define sensor constants
+#define B 3950		// K
+#define RT0 10000	// Ohm
+#define R 10000		// Ohm
+#define VCC 3		// V
+//#define T0 25.0		// °C
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
@@ -91,7 +101,7 @@ typedef struct {
 #pragma pack(1)
 typedef struct {
 	int16_t temperature;
-	int16_t humidity;
+	int8_t humidity;
 	int16_t light;
 }__attribute__ ((packed)) sensor_msg_t;
 #pragma pack()
@@ -115,6 +125,10 @@ typedef struct {
 downlink_msg_t downlinkMsg;
 sensor_msg_t sensorMsg;
 msg_header_t headerMsg;
+
+volatile float VRL = 0;
+volatile float VRTh = 0;
+//volatile float VHum = 0;
 
 configuration_t config = {10,10};
 
@@ -151,6 +165,20 @@ int main(void) {
 	MX_SPI1_Init();
 
 	/* USER CODE BEGIN 2 */
+	HAL_ADC_Start(&hadc);
+
+	// For value from ADC channels
+	float VRTemp, VRLight, RTemp, RLight, ln, T0, TX, Light;
+	// For humidity values
+	uint8_t buf[5], res;
+
+	// Data for testing communication
+	uint8_t cntC = 0;
+	float humArray[] = {52.0, 54.0, 51.0, 55.0, 60.0, 61.0, 58.0, 55.0, 56.0, 53.0};
+	float lightArray[] = {8.2, 8.8, 8.4, 8.5, 9.3, 12.4, 10.1, 9.8, 9.6, 9.3};
+	float tempArray[] = {24.5, 24.3, 24.3, 25.5, 26.3, 27.5, 28.3, 25.2, 24.3, 24.1};
+
+
 	myAddr = LL_GetUID_Word0(); //use word0 of unique ID as addr
 
 
@@ -173,13 +201,64 @@ int main(void) {
 		/* USER CODE END WHILE */
 
 		// TODO kiolvasott szenzoradatok
+		// Reading data from sensors
+	   if(HAL_ADC_PollForConversion(&hadc, 100) == HAL_OK) {
+	    	VRL = HAL_ADC_GetValue(&hadc);
+	   }
+
+	   if(HAL_ADC_PollForConversion(&hadc, 100) == HAL_OK) {
+	    	VRTh = HAL_ADC_GetValue(&hadc);
+	   }
+
+
+	   /* if(HAL_ADC_PollForConversion(&hadc, 100) == HAL_OK) {
+	    	VHum = HAL_ADC_GetValue(&hadc);
+	   }*/
+
+	   VRL = (VCC / 4095.0) * VRL;		// Conversion to voltage
+	   VRTh = (VCC / 4095.0) * VRTh;	// Conversion to voltage
+	   //VHum = (VCC / 4096.0) * VHum;	// Conversion to voltage
+
+	   // Calculate temperature
+	   VRTemp = VCC - VRTh;
+	   RTemp = VRTemp / (VRTh / R);		//Resistance of the thermistor
+
+	   T0 = 25 + 273.15;
+	   ln = log10(RTemp / RT0);
+	   TX = (1 / ((ln / B) + (1 / T0))); //Temperature from thermistor
+
+	   TX = TX - 273.15;                 //Conversion to Celsius
+
+
+	   // Calculate light
+	   /* EB = 10log(RA/RB) / gamma + log(EA)
+	    * RA = 5-10 kOhm -> 8
+	    * gamma = 0.5
+	    *
+	    * |
+	    * ¡
+	    * E = 640 * R^-2
+	    */
+
+	   VRLight = VCC - VRL;
+	   RLight = VRLight / (VRL / R);		// Resistance of photoresistor
+
+	   Light = 640 * pow((RLight / 1000), -2);	// Luminance in lux (resistances in kOhm)
+
+
+	   // Calculate humidity
+	   res = read_DHT11(buf);
+
 
 		//Do measurements here, update sensor data
 		headerMsg.myaddr = myAddr;
 		headerMsg.msgType = MSG_TYPE_TEMP_HUM;
-		sensorMsg.temperature = 30;
-		sensorMsg.humidity = 70;
-		sensorMsg.light = 20;
+		sensorMsg.temperature = (uint16_t)TX;
+		sensorMsg.humidity = buf[1];
+		sensorMsg.light = (uint16_t)Light;
+		/* sensorMsg.temperature = (uint16_t)tempArray[cntC];
+		sensorMsg.humidity = (uint8_t)humArray[cntC];
+		sensorMsg.light = (uint16_t)lightArray[cntC];*/
 		memcpy(headerMsg.msg, &sensorMsg, sizeof(sensor_msg_t));
 
 		//send on radio
@@ -218,6 +297,47 @@ int main(void) {
 		}
 
 		// TODO beavatkozás
+		// too hot: switch red led on
+		if (TX > 30) {
+			//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+		}
+		else {
+			//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+		}
+
+		// too dark: switch green led on
+		if (Light < 20) {
+			//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_SET);
+			for(int i = 0; i < 10; i++) {
+				//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_12);
+				HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+				HAL_Delay(200);
+			}
+		}
+		else {
+			//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+		}
+
+		// too dry: flashing green led on
+/*		if (Hum < 30) {
+			for(int i = 1; i < 10; i++) {
+				//HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_12);
+				HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+				HAL_Delay(200);
+			}
+		}
+		else {
+			//HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+		}*/
+		if (cntC == 9){
+			cntC = 0;
+		}
+		else {
+			cntC++;
+		}
 
 		// Try again 1s later
 
